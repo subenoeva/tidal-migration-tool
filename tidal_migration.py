@@ -2,9 +2,8 @@
 # -*- coding: utf-8 -*-
 
 """
-Tidal Account Migration Tool.
-Allows migrating Liked Tracks (preserving chronological order)
-and User Playlists from one account to another.
+Tidal Account Migration Tool (Full Suite).
+Migrates Tracks, Albums, Artists, and Playlists preserving chronological order.
 """
 
 import tidalapi
@@ -12,7 +11,6 @@ import time
 import sys
 
 # --- CONFIGURATION ---
-# Sleep time to avoid Rate Limiting (Error 429)
 API_SLEEP_TIME = 0.02 
 PLAYLIST_SLEEP_TIME = 0.5
 LIMIT_PAGINATION = 50
@@ -22,7 +20,6 @@ def authenticate_user(session_name):
     print(f"\n🔑 --- LOGIN: {session_name} ACCOUNT ---")
     session = tidalapi.Session()
     try:
-        # login_oauth_simple() handles the link printing and polling
         session.login_oauth_simple()
         if session.check_login():
             print(f"✅ Connected as: {session.user.first_name} {session.user.last_name}")
@@ -39,15 +36,20 @@ def confirm_action(message):
     response = input(f"⚠️  {message} (y/n): ").lower()
     return response == 'y'
 
-def get_favorites_manual(session):
+def get_ordered_favorites(session, content_type):
     """
-    Fetches favorites by forcing DATE order and DESCENDING direction
-    via a raw API request, bypassing the library's default sort order.
+    Generic fetcher for Tracks, Albums, and Artists.
+    Forces DATE order and DESCENDING direction via raw API.
+    
+    content_type options: 'tracks', 'albums', 'artists'
     """
-    print("   ...Fetching favorites list (Order: Date)...")
-    found_tracks = []
+    print(f"   ...Fetching {content_type} list (Order: Date)...")
+    found_items = []
     offset = 0
     user_id = session.user.id
+    
+    # Adjust JSON parsing based on type
+    is_artist = content_type == 'artists'
     
     while True:
         try:
@@ -58,23 +60,38 @@ def get_favorites_manual(session):
                 'orderDirection': 'DESC'   
             }
             
-            # Raw request to ensure sorting parameters are respected
-            json_obj = session.request.request('GET', f'users/{user_id}/favorites/tracks', params=params).json()
+            # Request to users/{id}/favorites/{content_type}
+            endpoint = f'users/{user_id}/favorites/{content_type}'
+            json_obj = session.request.request('GET', endpoint, params=params).json()
             items = json_obj.get('items', [])
             
             if not items:
                 break 
             
-            for item in items:
-                track_data = item.get('item', {})
-                found_tracks.append({
-                    'id': track_data.get('id'),
-                    'name': track_data.get('title'),
-                    'artist': track_data.get('artist', {}).get('name', 'Unknown'),
-                    'added_at': item.get('created') 
+            for entry in items:
+                # The actual data is inside the 'item' key
+                data = entry.get('item', {})
+                
+                # Extract info based on type
+                item_id = data.get('id')
+                added_at = entry.get('created')
+                
+                if is_artist:
+                    name = data.get('name', 'Unknown')
+                    desc = "Artist"
+                else:
+                    name = data.get('title', 'Unknown')
+                    artist_name = data.get('artist', {}).get('name', 'Unknown')
+                    desc = artist_name
+
+                found_items.append({
+                    'id': item_id,
+                    'name': name,
+                    'desc': desc, # Artist name or "Artist" label
+                    'added_at': added_at
                 })
             
-            sys.stdout.write(f"\r   -> Fetched {len(found_tracks)} tracks...")
+            sys.stdout.write(f"\r   -> Fetched {len(found_items)} {content_type}...")
             sys.stdout.flush()
             
             offset += LIMIT_PAGINATION
@@ -82,96 +99,109 @@ def get_favorites_manual(session):
                 break
                 
         except Exception as e:
-            print(f"\n❌ Error fetching favorites page: {e}")
+            print(f"\n❌ Error fetching {content_type}: {e}")
             break
             
-    print("") # Final newline
-    return found_tracks
+    print("") 
+    return found_items
 
-def wipe_destination_favorites(dst):
-    """Removes all favorites from the destination account."""
-    print("\n🗑️  --- WIPING DESTINATION FAVORITES ---")
-    try:
-        tracks = dst.user.favorites.tracks(limit=None)
-        total = len(tracks)
-        
-        if total == 0:
-            print("✅ Account is already clean.")
-            return
+# --- MIGRATION FUNCTIONS ---
 
-        if not confirm_action(f"WARNING: This will DELETE {total} tracks from the DESTINATION account. Are you sure?"):
-            print("Operation cancelled.")
-            return
-
-        print("🚀 Deleting...")
-        count = 0
-        for track in tracks:
-            try:
-                dst.user.favorites.remove_track(track.id)
-                count += 1
-                if count % 50 == 0:
-                    sys.stdout.write(f"\r   -> Deleted {count}/{total}...")
-                    sys.stdout.flush()
-                time.sleep(API_SLEEP_TIME)
-            except Exception:
-                pass
-        print(f"\n✅ Wipe completed.")
-    except Exception as e:
-        print(f"❌ Error during wipe: {e}")
-
-def migrate_favorites(src, dst, wipe_first=False):
-    """Orchestrates favorite tracks migration preserving chronological order."""
-    if wipe_first:
-        wipe_destination_favorites(dst)
-
-    print("\n❤️  --- PREPARING FAVORITES MIGRATION ---")
+def migrate_artists(src, dst):
+    """Migrates followed artists."""
+    print("\n🎤 --- MIGRATING ARTISTS ---")
+    artists = get_ordered_favorites(src, 'artists')
+    total = len(artists)
     
-    # 1. Get correctly ordered list (Newest -> Oldest)
-    tracks = get_favorites_manual(src)
+    if total == 0:
+        print("No followed artists found.")
+        return
+
+    # Reverse to keep "Followed Date" order (Oldest -> Newest)
+    artists.reverse()
+    print(f"🚀 Copying {total} artists...")
+
+    count = 0
+    for item in artists:
+        try:
+            dst.user.favorites.add_artist(item['id'])
+            count += 1
+            if count % 10 == 0:
+                sys.stdout.write(f"\r   -> Followed {count}/{total}...")
+                sys.stdout.flush()
+            time.sleep(API_SLEEP_TIME)
+        except Exception:
+            pass
+    print(f"\n✅ Artists migration finished.")
+
+def migrate_albums(src, dst):
+    """Migrates liked albums."""
+    print("\n💿 --- MIGRATING ALBUMS ---")
+    albums = get_ordered_favorites(src, 'albums')
+    total = len(albums)
+    
+    if total == 0:
+        print("No liked albums found.")
+        return
+
+    # Reverse to keep "Added Date" order
+    albums.reverse()
+    print(f"🚀 Copying {total} albums...")
+
+    count = 0
+    for item in albums:
+        try:
+            dst.user.favorites.add_album(item['id'])
+            count += 1
+            if count % 10 == 0:
+                sys.stdout.write(f"\r   -> Added {count}/{total}...")
+                sys.stdout.flush()
+            time.sleep(API_SLEEP_TIME)
+        except Exception:
+            pass
+    print(f"\n✅ Albums migration finished.")
+
+def migrate_tracks(src, dst, wipe_first=False):
+    """Migrates liked tracks."""
+    if wipe_first:
+        wipe_destination_tracks(dst)
+
+    print("\n❤️  --- MIGRATING LIKED TRACKS ---")
+    tracks = get_ordered_favorites(src, 'tracks')
     total = len(tracks)
     
     if total == 0:
         print("No favorites found.")
         return
 
-    # 2. Preview for safety
-    print("\n📝 --- PREVIEW ---")
-    print("Verify these are your MOST RECENT tracks:")
+    # Preview
+    print("\n📝 --- PREVIEW (Most Recent) ---")
     for i, t in enumerate(tracks[:5]):
-        print(f"   {i+1}. {t['name']} - {t['artist']}")
+        print(f"   {i+1}. {t['name']} - {t['desc']}")
     
-    if not confirm_action("Start copying?"):
-        print("Cancelled.")
+    if not confirm_action("Start copying tracks?"):
+        print("Skipping tracks.")
         return
 
-    # 3. Reverse list (Oldest -> Newest) for sequential insertion
     print("\n🔄 Reversing list for chronological insertion...")
     tracks.reverse()
 
     print(f"🚀 Copying {total} tracks...")
-    
     count = 0
-    errors = 0
-    
-    for track in tracks:
+    for item in tracks:
         try:
-            dst.user.favorites.add_track(track['id'])
+            dst.user.favorites.add_track(item['id'])
             count += 1
-            
-            if count % 25 == 0:
+            if count % 50 == 0:
                 sys.stdout.write(f"\r   -> Processed {count}/{total}...")
                 sys.stdout.flush()
-            
             time.sleep(API_SLEEP_TIME)
-            
         except Exception:
-            errors += 1
             pass 
-            
-    print(f"\n✅ Process finished. Total: {count}. Errors/Duplicates: {errors}")
+    print(f"\n✅ Tracks migration finished.")
 
 def migrate_playlists(src, dst):
-    """Migrates only user-created playlists."""
+    """Migrates user-created playlists."""
     print("\n🎵 --- MIGRATING PLAYLISTS ---")
     try:
         playlists = src.user.playlists() 
@@ -184,7 +214,6 @@ def migrate_playlists(src, dst):
     migrated_count = 0
     for pl in playlists:
         try:
-            # Check playlist ownership
             try:
                 creator_id = pl.creator.id
             except AttributeError:
@@ -213,15 +242,46 @@ def migrate_playlists(src, dst):
     
     print(f"✅ Playlists finished. Migrated: {migrated_count}.")
 
+def wipe_destination_tracks(dst):
+    """Removes all favorites from the destination account."""
+    print("\n🗑️  --- WIPING DESTINATION TRACKS ---")
+    try:
+        tracks = dst.user.favorites.tracks(limit=None)
+        total = len(tracks)
+        if total == 0: return
+
+        if not confirm_action(f"WARNING: This will DELETE {total} tracks from DESTINATION. Sure?"):
+            return
+
+        print("🚀 Deleting...")
+        count = 0
+        for track in tracks:
+            try:
+                dst.user.favorites.remove_track(track.id)
+                count += 1
+                if count % 50 == 0:
+                    sys.stdout.write(f"\r   -> Deleted {count}/{total}...")
+                    sys.stdout.flush()
+                time.sleep(API_SLEEP_TIME)
+            except Exception:
+                pass
+        print(f"\n✅ Wipe completed.")
+    except Exception as e:
+        print(f"❌ Error during wipe: {e}")
+
+# --- MENU ---
+
 def show_menu():
     print("\n========================================")
-    print("   TIDAL MIGRATION TOOL")
+    print("   TIDAL FULL MIGRATION TOOL")
     print("========================================")
-    print("1. 🚀 FULL MIGRATION (Recommended)")
-    print("2. ❤️  Favorites Only (With Wipe)")
-    print("3. ❤️  Favorites Only (Append - No Wipe)")
-    print("4. 📂 Playlists Only")
-    print("5. 🗑️  Wipe Destination Favorites Only")
+    print("1. 🚀 FULL ACCOUNT MIGRATION (Everything)")
+    print("   (Artists -> Albums -> Tracks -> Playlists)")
+    print("----------------------------------------")
+    print("2. 🎤 Artists Only")
+    print("3. 💿 Albums Only")
+    print("4. ❤️  Tracks Only (Wipe & Copy)")
+    print("5. 📂 Playlists Only")
     print("6. ❌ Exit")
     print("========================================")
 
@@ -236,16 +296,19 @@ def main():
         choice = input("Select option: ")
 
         if choice == '1':
-            migrate_favorites(session_source, session_dest, wipe_first=True)
+            # Orden lógico: Primero lo básico (Artistas), luego colecciones (Albums), luego Tracks y Playlists
+            migrate_artists(session_source, session_dest)
+            migrate_albums(session_source, session_dest)
+            migrate_tracks(session_source, session_dest, wipe_first=True)
             migrate_playlists(session_source, session_dest)
         elif choice == '2':
-            migrate_favorites(session_source, session_dest, wipe_first=True)
+            migrate_artists(session_source, session_dest)
         elif choice == '3':
-            migrate_favorites(session_source, session_dest, wipe_first=False)
+            migrate_albums(session_source, session_dest)
         elif choice == '4':
-            migrate_playlists(session_source, session_dest)
+            migrate_tracks(session_source, session_dest, wipe_first=True)
         elif choice == '5':
-            wipe_destination_favorites(session_dest)
+            migrate_playlists(session_source, session_dest)
         elif choice == '6':
             print("👋 Bye!")
             break

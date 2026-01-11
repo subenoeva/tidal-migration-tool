@@ -1,16 +1,20 @@
-# Tidal Account Migration Tool
+# TIDAL Full Account Migration Tool
 
-A Python-based tool to migrate content between two **TIDAL** accounts, preserving the original chronological order of *Liked Tracks* (favorites) and copying user-created playlists.
+A Python-based CLI tool to migrate **Artists, Albums, Tracks, and Playlists** between two **TIDAL** accounts while preserving the original chronological order (date followed / added).
+
+This tool is designed for **full account migration**, safely handling large libraries and avoiding API rate limits.
 
 ## ✨ Features
 
-* ✅ Migrate **liked tracks** while preserving the original “date added” order.
-* ✅ Migrate **user-created playlists** (excluding followed or collaborative playlists).
-* 🗑️ Optional **full wipe** of destination favorites before migration.
-* 🔁 Append mode to add favorites without deleting existing ones.
-* 🔐 OAuth authentication for both source and destination accounts.
-* 🚦 Rate-limit safe with configurable delays.
-* 📋 Interactive CLI menu.
+* ✅ Migrate **followed artists** in original follow order
+* ✅ Migrate **liked albums** preserving “date added”
+* ✅ Migrate **liked tracks** preserving “date added”
+* ✅ Migrate **user-created playlists** (name, description, track order)
+* 🗑️ Optional **wipe of destination liked tracks** before migration
+* 🔐 OAuth authentication for source and destination accounts
+* 🚦 Rate-limit safe with configurable delays
+* 📋 Interactive command-line menu
+* 🔁 Correct chronological reconstruction via reversed insertion
 
 ## 📦 Requirements
 
@@ -26,76 +30,87 @@ pip install tidalapi
 
 ## 🚀 Usage
 
-1. Save the script, for example as:
+1. Save the script, for example:
 
 ```bash
-tidal_migration.py
+tidal_full_migration.py
 ```
 
 2. (Optional) Make it executable on Linux/macOS:
 
 ```bash
-chmod +x tidal_migration.py
+chmod +x tidal_full_migration.py
 ```
 
-3. Run the script:
+3. Run it:
 
 ```bash
-./tidal_migration.py
+./tidal_full_migration.py
 # or
-python3 tidal_migration.py
+python3 tidal_full_migration.py
 ```
 
-## 🔐 Authentication
+## 🔐 Authentication Flow
 
-The script will prompt you to log in **twice**:
+You will authenticate **twice**:
 
-1. **SOURCE** → source account
-2. **DESTINATION** → destination account
+1. **SOURCE** → account to migrate from
+2. **DESTINATION** → account to migrate to
 
 ⚠️ **Important:**
-Open the second login link in **incognito/private mode** or a different browser to avoid session reuse.
+Open the **second login link in incognito/private mode** (or a different browser) to avoid session conflicts.
 
 ## 📋 Menu Options
 
 ```
-1. FULL MIGRATION (Recommended)
-   - Wipes destination favorites
-   - Migrates favorites in chronological order
-   - Migrates user-created playlists
+1. FULL ACCOUNT MIGRATION (Everything)
+   Order:
+   Artists → Albums → Tracks → Playlists
 
-2. Favorites Only (With Wipe)
-   - Wipes destination favorites
-   - Migrates favorites only
+2. Artists Only
+   Migrates followed artists
 
-3. Favorites Only (Append - No Wipe)
-   - Appends favorites without deleting existing ones
+3. Albums Only
+   Migrates liked albums
 
-4. Playlists Only
-   - Migrates user-created playlists only
+4. Tracks Only (Wipe & Copy)
+   Deletes destination liked tracks, then migrates tracks
 
-5. Wipe Destination Favorites Only
-   - Deletes all destination favorites
+5. Playlists Only
+   Migrates user-created playlists only
 
 6. Exit
 ```
 
-## ❤️ Favorites Migration (Technical Details)
+## 🎯 Migration Logic (Key Details)
 
-* Uses a **raw API request** to force:
+### Artists
+
+* Fetched via raw API with:
 
   * `order=DATE`
   * `orderDirection=DESC`
-* Favorites are fetched from **newest to oldest**
-* A preview of the most recent tracks is shown before copying
-* The list is reversed prior to insertion to ensure correct chronological order in the destination account
+* Reversed before insertion to preserve follow chronology
 
-## 🎵 Playlists Migration
+### Albums
 
-* Only playlists:
+* Same raw API strategy
+* Preserves original “liked date” order
 
-  * Created by the user
-  * Non-collaborative
+### Tracks
+
+* Uses raw API to bypass library default sorting
+* Shows a **preview of most recent tracks** before copying
+* Destination tracks can be **fully wiped** before migration
+* Inserted from oldest → newest to maintain timeline integrity
+
+### Playlists
+
+* Only playlists **created by the user** are migrated
+* Skips:
+
+  * Followed playlists
+  * Collaborative playlists
 * Preserves:
 
   * Name
@@ -110,26 +125,27 @@ At the top of the script:
 ```python
 API_SLEEP_TIME = 0.02        # Delay between API calls
 PLAYLIST_SLEEP_TIME = 0.5   # Delay between playlist creations
-LIMIT_PAGINATION = 50       # Pagination size
+LIMIT_PAGINATION = 50       # API page size
 ```
 
-Adjust these values if you encounter **429 (Rate Limit)** errors.
+Increase delays if you encounter **HTTP 429 (Rate Limit)** errors.
 
-## ⚠️ Warnings
+## ⚠️ Warnings & Limitations
 
-* ❌ Favorite deletion is **irreversible**
-* ⚠️ The following are NOT migrated:
+* ❌ Deleting liked tracks on the destination account is **irreversible**
+* ⚠️ This tool does NOT migrate:
 
-  * Favorite albums
-  * Favorite artists
-  * Followed playlists
+  * Playback history
+  * Downloads
+  * Account settings
 * ⏱️ Large libraries may take several minutes to migrate
+* ⚠️ Duplicate items may be silently skipped by TIDAL
 
 ## 🧪 Project Status
 
 * ✔️ Stable for personal use
 * 🛠️ No automated tests
-* 📌 Designed as a one-time migration tool
+* 📌 Intended for one-time or infrequent migrations
 
 ## 📄 License
 
